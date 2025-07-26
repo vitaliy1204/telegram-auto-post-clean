@@ -1,12 +1,17 @@
 import os
+import io
+import re
 import json
 import logging
 import datetime
 import asyncio
-from telegram import Bot, InputMediaPhoto, InputMediaVideo
 from dotenv import load_dotenv
+from telegram import Bot, InputMediaPhoto
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 load_dotenv()
 
@@ -17,124 +22,153 @@ PHOTO_DIR = "photos"
 
 logging.basicConfig(level=logging.INFO)
 
-def get_today_text():
+
+def parse_google_drive_file_id(url):
+    match = re.search(r"/d/([a-zA-Z0-9_-]+)", url)
+    return match.group(1) if match else None
+
+
+def download_drive_file(file_id, creds_info, filename):
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, ["https://www.googleapis.com/auth/drive.readonly"])
+    service = build("drive", "v3", credentials=creds)
+    request = service.files().get_media(fileId=file_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    with open(filename, "wb") as f:
+        f.write(fh.getvalue())
+    return filename
+
+
+def get_today_text_and_photos():
     try:
+        creds_info = json.loads(os.getenv("GOOGLE_SHEET_CREDENTIALS"))
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
-        creds_json_str = os.getenv("GOOGLE_SHEET_CREDENTIALS")
-        creds_info = json.loads(creds_json_str)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SPREADSHEET_ID).sheet1
 
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         data = sheet.get_all_values()
         if not data or len(data) < 2:
-            logging.warning("Таблиця пуста або не має достатньо рядків.")
-            return None
+            return None, []
 
         headers = data[0]
         records = data[1:]
 
         def find_index(targets):
             for i, h in enumerate(headers):
-                h_clean = h.strip().lower()
-                if any(target in h_clean for target in targets):
+                if any(t in h.strip().lower() for t in targets):
                     return i
             return -1
 
         idx_date = find_index(["дата", "date"])
         idx_text = find_index(["текст", "post", "текст поста"])
-        idx_extra = find_index(["доп", "дополнительно", "extra"])
-        idx_who = find_index(["хто", "кто", "who"])
+        idx_photo = find_index(["фото", "photo", "drive"])
 
         if idx_date == -1 or idx_text == -1:
-            logging.error("Не знайдено обов'язкових колонок 'дата' або 'текст'")
-            return None
+            logging.error("❌ Не знайдено обов'язкових колонок")
+            return None, []
 
         lines = []
+        photo_links = []
         for row in records:
-            # Захист від коротких рядків
-            row_date = row[idx_date].strip() if len(row) > idx_date else ""
-            if row_date != today:
+            if len(row) <= idx_date:
+                continue
+            if row[idx_date].strip() != today:
                 continue
 
-            text = row[idx_text].strip() if len(row) > idx_text else ""
-            extra = row[idx_extra].strip() if idx_extra != -1 and len(row) > idx_extra else ""
-            who = row[idx_who].strip() if idx_who != -1 and len(row) > idx_who else ""
-
-            line = " ".join([text, extra, who]).strip()
-            lines.append(line)
+            text = row[idx_text].strip() if idx_text < len(row) else ""
+            photo = row[idx_photo].strip() if idx_photo != -1 and idx_photo < len(row) else ""
+            lines.append(text)
+            if photo:
+                photo_links.append(photo)
 
         if not lines:
-            logging.info(f"Немає записів на дату {today}")
-            return None
+            return None, []
 
-        header = f"*Запорізька гімназія №110*\nДата: {today}"
-        full_text = header + "\n\n" + "\n".join(lines).strip()
-        return full_text
+        full_text = f"*Запорізька гімназія №110*
+Дата: {today}
+
+" + "
+
+".join(lines)
+        return full_text, photo_links
 
     except Exception as e:
-        logging.error(f"❌ Помилка при отриманні тексту з таблиці: {e}")
-        return None
+        logging.error(f"❌ Помилка при отриманні тексту/фото: {e}")
+        return None, []
 
-def load_media(caption):
+
+def download_all_photos(photo_links):
+    os.makedirs(PHOTO_DIR, exist_ok=True)
+    creds_info = json.loads(os.getenv("GOOGLE_SHEET_CREDENTIALS"))
+    paths = []
+
+    for link in photo_links:
+        file_id = parse_google_drive_file_id(link)
+        if file_id:
+            filename = os.path.join(PHOTO_DIR, f"{file_id}.jpg")
+            try:
+                download_drive_file(file_id, creds_info, filename)
+                paths.append(filename)
+                logging.info(f"✅ Завантажено: {filename}")
+            except Exception as e:
+                logging.error(f"❌ Не вдалося завантажити {link}: {e}")
+    return paths
+
+
+def build_media_group(caption, photo_paths):
     media = []
-    folder = PHOTO_DIR
-    files = sorted([
-        os.path.join(folder, f)
-        for f in os.listdir(folder)
-        if f.lower().endswith(('.jpg', '.jpeg', '.png', '.mp4', '.mov'))
-    ])
-
     first = True
-    for file in files:
-        if file.lower().endswith(('.mp4', '.mov')):
-            media.append(InputMediaVideo(
-                media=open(file, 'rb'),
-                caption=caption if first else None,
-                parse_mode="Markdown" if first else None
-            ))
-        else:
-            media.append(InputMediaPhoto(
-                media=open(file, 'rb'),
-                caption=caption if first else None,
-                parse_mode="Markdown" if first else None
-            ))
+    for path in photo_paths:
+        media.append(InputMediaPhoto(
+            media=open(path, 'rb'),
+            caption=caption if first else None,
+            parse_mode="Markdown" if first else None
+        ))
         first = False
-    return media, files
+    return media
 
-async def main():
-    print(f"TOKEN: {TOKEN}")
-    print(f"CHANNEL: {CHANNEL}")
-    caption = get_today_text()
+
+async def send_post():
+    logging.info("🚀 Запуск публікації...")
+    caption, photo_links = get_today_text_and_photos()
     if not caption:
-        print("📭 Нет текста для", datetime.datetime.today().strftime("%Y-%m-%d"))
+        logging.info("📭 Немає тексту для сьогоднішньої публікації.")
         return
 
-    print("📥 Загружаю фото и видео...")
-    media, files = load_media(caption)
+    photo_paths = download_all_photos(photo_links)
+    if not photo_paths:
+        logging.info("📭 Немає фото для публікації.")
+        return
+
     bot = Bot(token=TOKEN)
+    media = build_media_group(caption, photo_paths)
 
     try:
         for i in range(0, len(media), 10):
-            chunk = media[i:i+10]
-            if isinstance(chunk[0], (InputMediaPhoto, InputMediaVideo)):
-                chunk[0].caption = caption
-                chunk[0].parse_mode = "Markdown"
-            await bot.send_media_group(chat_id=CHANNEL, media=chunk)
-            print(f"✅ Опубликована часть {i//10+1}/{(len(media)-1)//10+1}")
+            await bot.send_media_group(chat_id=CHANNEL, media=media[i:i + 10])
+        logging.info("✅ Пост опубліковано")
     except Exception as e:
-        print(f"❌ Ошибка при публикации: {e}")
-        return
+        logging.error(f"❌ Помилка під час публікації: {e}")
 
-    for file in files:
+    for f in photo_paths:
         try:
-            os.remove(file)
-            print(f"🗑 Удалено: {file}")
-        except Exception as e:
-            print(f"⚠️ Не удалось удалить {file}: {e}")
+            os.remove(f)
+        except Exception:
+            pass
+
+
+def schedule_daily_post():
+    scheduler = AsyncIOScheduler(timezone="Europe/Kyiv")
+    scheduler.add_job(send_post, "cron", hour=16, minute=0)
+    scheduler.start()
+    logging.info("🕓 Планувальник запущено (щодня о 16:00)")
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    schedule_daily_post()
+    asyncio.get_event_loop().run_forever()
