@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import datetime
 import asyncio
@@ -11,7 +12,6 @@ load_dotenv()
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL = os.getenv("CHANNEL")
-GOOGLE_SHEET_CREDENTIALS = os.getenv("GOOGLE_SHEET_CREDENTIALS", "credentials.json")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 PHOTO_DIR = "photos"
 
@@ -20,7 +20,12 @@ logging.basicConfig(level=logging.INFO)
 def get_today_text():
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_SHEET_CREDENTIALS, scope)
+        
+        # Зчитуємо JSON ключ із змінної оточення
+        creds_json_str = os.getenv("GOOGLE_SHEET_CREDENTIALS")
+        creds_info = json.loads(creds_json_str)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SPREADSHEET_ID).sheet1
 
