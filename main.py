@@ -172,9 +172,3 @@ def schedule_daily_post():
 if __name__ == "__main__":
     schedule_daily_post()
     asyncio.get_event_loop().run_forever()
-
-
-
-if __name__ == "__main__":
-    schedule_daily_post()
-    asyncio.get_event_loop().run_forever()
