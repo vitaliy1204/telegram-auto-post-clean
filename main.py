@@ -89,8 +89,10 @@ def get_today_text_and_photos():
         if not lines:
             return None, []
 
-        full_text = f"*Запорізька гімназія №110*"
+        full_text = f"""*Запорізька гімназія №110*
 Дата: {today}
+
+{'\n\n'.join(lines)}"""
 
 " + "
 
