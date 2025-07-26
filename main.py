@@ -31,6 +31,7 @@ def get_today_text():
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         data = sheet.get_all_values()
         if not data or len(data) < 2:
+            logging.warning("Таблиця пуста або не має достатньо рядків.")
             return None
 
         headers = data[0]
@@ -54,20 +55,20 @@ def get_today_text():
 
         lines = []
         for row in records:
-            if len(row) <= idx_date:
-                continue
-            row_date = row[idx_date].strip()
+            # Захист від коротких рядків
+            row_date = row[idx_date].strip() if len(row) > idx_date else ""
             if row_date != today:
                 continue
 
-            text = row[idx_text].strip() if idx_text < len(row) else ""
-            extra = row[idx_extra].strip() if idx_extra != -1 and idx_extra < len(row) else ""
-            who = row[idx_who].strip() if idx_who != -1 and idx_who < len(row) else ""
+            text = row[idx_text].strip() if len(row) > idx_text else ""
+            extra = row[idx_extra].strip() if idx_extra != -1 and len(row) > idx_extra else ""
+            who = row[idx_who].strip() if idx_who != -1 and len(row) > idx_who else ""
 
             line = " ".join([text, extra, who]).strip()
             lines.append(line)
 
         if not lines:
+            logging.info(f"Немає записів на дату {today}")
             return None
 
         header = f"*Запорізька гімназія №110*\nДата: {today}"
@@ -75,7 +76,7 @@ def get_today_text():
         return full_text
 
     except Exception as e:
-        logging.error(f"Ошибка при получении текста из таблицы: {e}")
+        logging.error(f"❌ Помилка при отриманні тексту з таблиці: {e}")
         return None
 
 def load_media(caption):
