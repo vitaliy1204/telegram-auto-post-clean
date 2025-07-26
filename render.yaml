@@ -2,6 +2,7 @@ services:
   - type: cron
     name: telegram-auto-post
     runtime: python
+    pythonVersion: 3.12
     schedule: "0 16 * * *"
-    buildCommand: "pip install -r requirements.txt"
+    buildCommand: "pip install -r вимоги.txt"
     startCommand: "python main.py"
