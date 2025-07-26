@@ -20,8 +20,7 @@ logging.basicConfig(level=logging.INFO)
 def get_today_text():
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        
-        # Зчитуємо JSON ключ із змінної оточення
+
         creds_json_str = os.getenv("GOOGLE_SHEET_CREDENTIALS")
         creds_info = json.loads(creds_json_str)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
@@ -30,16 +29,43 @@ def get_today_text():
         sheet = client.open_by_key(SPREADSHEET_ID).sheet1
 
         today = datetime.datetime.now().strftime("%Y-%m-%d")
-        records = sheet.get_all_records()
-        lines = []
+        data = sheet.get_all_values()
+        if not data or len(data) < 2:
+            return None
 
+        headers = data[0]
+        records = data[1:]
+
+        def find_index(targets):
+            for i, h in enumerate(headers):
+                h_clean = h.strip().lower()
+                if any(target in h_clean for target in targets):
+                    return i
+            return -1
+
+        idx_date = find_index(["дата", "date"])
+        idx_text = find_index(["текст", "post", "текст поста"])
+        idx_extra = find_index(["доп", "дополнительно", "extra"])
+        idx_who = find_index(["хто", "кто", "who"])
+
+        if idx_date == -1 or idx_text == -1:
+            logging.error("Не знайдено обов'язкових колонок 'дата' або 'текст'")
+            return None
+
+        lines = []
         for row in records:
-            if str(row.get("Дата", "")).strip() == today:
-                b = str(row.get("Текст поста", "")).strip()
-                c = str(row.get("Дополнительно", "")).strip()
-                d = str(row.get("Кто", "")).strip()
-                line = " ".join([b, c, d]).strip()
-                lines.append(line)
+            if len(row) <= idx_date:
+                continue
+            row_date = row[idx_date].strip()
+            if row_date != today:
+                continue
+
+            text = row[idx_text].strip() if idx_text < len(row) else ""
+            extra = row[idx_extra].strip() if idx_extra != -1 and idx_extra < len(row) else ""
+            who = row[idx_who].strip() if idx_who != -1 and idx_who < len(row) else ""
+
+            line = " ".join([text, extra, who]).strip()
+            lines.append(line)
 
         if not lines:
             return None
