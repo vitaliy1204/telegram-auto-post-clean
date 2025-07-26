@@ -89,9 +89,9 @@ def get_today_text_and_photos():
         if not lines:
             return None, []
 
-      header = f"**Запорізька гімназія №110**\nДата: {today}"
-        full_text = header + "\n\n" + "\n".join(lines).strip()
-        return full_text
+        full_text = f"*Запорізька гімназія №110*
+Дата: {today}
+
 " + "
 
 ".join(lines)
@@ -167,6 +167,12 @@ def schedule_daily_post():
     scheduler.add_job(send_post, "cron", hour=16, minute=0)
     scheduler.start()
     logging.info("🕓 Планувальник запущено (щодня о 16:00)")
+
+
+if __name__ == "__main__":
+    schedule_daily_post()
+    asyncio.get_event_loop().run_forever()
+
 
 
 if __name__ == "__main__":
