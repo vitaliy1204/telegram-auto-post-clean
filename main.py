@@ -77,13 +77,9 @@ def get_today_text_and_photos():
         if not lines:
             return None, []
 
-        full_text = f"*Запорізька гімназія №110*
-Дата: {today}
-
-" + "
-
-".join(lines)
-        return full_text, photo_links
+       header = f"""*Запорізька гімназія №110*
+Дата: {сьогодні}"""
+    return full_text, media_urls
 
     except Exception as e:
         logging.error(f"❌ Помилка при отриманні тексту з таблиці: {e}")
