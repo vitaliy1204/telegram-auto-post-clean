@@ -1,51 +1,51 @@
 import os
-from datetime import datetime
-from dotenv import load_dotenv
+import time
 import gspread
+from dotenv import load_dotenv
 from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Bot, InputMediaPhoto
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
+from telegram import Bot
 
+# Завантаження .env
 load_dotenv()
 
-GOOGLE_CREDENTIALS = "google_credentials.json"
-SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME")
-SHEET_NAME = os.getenv("SHEET_NAME")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# Налаштування змінних середовища
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+# Ініціалізація Telegram-бота
+bot = Bot(token=BOT_TOKEN)
+CHAT_ID = "@your_channel_username"  # Заміни на свій чат або канал
+
+# Підключення до Google Sheets
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 credentials = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDENTIALS, scope)
 client = gspread.authorize(credentials)
+sheet = client.open_by_key(SPREADSHEET_ID).sheet1
 
-def get_data():
-    sheet = client.open(SPREADSHEET_NAME).worksheet(SHEET_NAME)
-    records = sheet.get_all_records()
-    today = datetime.now().strftime('%d.%m.%Y')
-    for row in records:
-        if row.get("Дата") == today:
-            return row
-    return None
-
-def post_to_telegram():
-    data = get_data()
-    if not data:
-        print("No data for today")
+def send_post():
+    today = time.strftime("%d.%m.%Y")
+    rows = sheet.get_all_values()[1:]  # пропустити заголовки
+    text_lines = []
+    for row in rows:
+        if row and row[0].strip() == today:
+            text_lines.append("\n".join(row[1:]))
+    if not text_lines:
+        print("Сьогодні немає даних для надсилання")
         return
-    
-    today = datetime.now()
-    header = f"""*Запорізька гімназія N110*
-Дата: {today.strftime('%d.%m.%Y')}
-Автор: {data.get("Автор", "Невідомо")}
-"""
-    description = data.get("Опис", "")
-    photo_url = data.get("Фото", "")
+    header = f"*Запорізька гімназія №110*\nДата: {today}\n"
+    full_text = header + "\n\n".join(text_lines)
+    bot.send_message(chat_id=CHAT_ID, text=full_text, parse_mode='Markdown')
+    print("Повідомлення надіслано.")
 
-    bot = Bot(token=TELEGRAM_TOKEN)
-    if photo_url:
-        bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_url, caption=header + description, parse_mode='Markdown')
-    else:
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=header + description, parse_mode='Markdown')
+# Планувальник на 16:00
+scheduler = BackgroundScheduler()
+scheduler.add_job(send_post, "cron", hour=16, minute=0)
+scheduler.start()
 
-if __name__ == "__main__":
-    post_to_telegram()
+print("Бот запущено...")
+
+# Тримати процес живим
+while True:
+    time.sleep(60)
