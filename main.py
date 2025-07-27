@@ -1,51 +1,49 @@
 import os
-import time
-import gspread
+import json
 from dotenv import load_dotenv
 from oauth2client.service_account import ServiceAccountCredentials
-from apscheduler.schedulers.background import BackgroundScheduler
-from telegram import Bot
+import gspread
+from apscheduler.schedulers.blocking import BlockingScheduler
+from telegram import Bot, InputMediaPhoto, InputMediaVideo
 
-# Завантаження .env
 load_dotenv()
 
-# Налаштування змінних середовища
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-GOOGLE_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+CHAT_ID = os.getenv("CHAT_ID")
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")
+SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME")
 
-# Ініціалізація Telegram-бота
-bot = Bot(token=BOT_TOKEN)
-CHAT_ID = "@your_channel_username"  # Заміни на свій чат або канал
+if not GOOGLE_CREDENTIALS:
+    raise ValueError("GOOGLE_CREDENTIALS не вказано у .env файлі")
 
-# Підключення до Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 credentials = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDENTIALS, scope)
 client = gspread.authorize(credentials)
-sheet = client.open_by_key(SPREADSHEET_ID).sheet1
+sheet = client.open(SPREADSHEET_NAME).sheet1
 
-def send_post():
-    today = time.strftime("%d.%m.%Y")
-    rows = sheet.get_all_values()[1:]  # пропустити заголовки
-    text_lines = []
-    for row in rows:
-        if row and row[0].strip() == today:
-            text_lines.append("\n".join(row[1:]))
-    if not text_lines:
-        print("Сьогодні немає даних для надсилання")
-        return
-    header = f"*Запорізька гімназія №110*\nДата: {today}\n"
-    full_text = header + "\n\n".join(text_lines)
-    bot.send_message(chat_id=CHAT_ID, text=full_text, parse_mode='Markdown')
-    print("Повідомлення надіслано.")
+bot = Bot(token=BOT_TOKEN)
 
-# Планувальник на 16:00
-scheduler = BackgroundScheduler()
-scheduler.add_job(send_post, "cron", hour=16, minute=0)
+def post_from_sheet():
+    data = sheet.get_all_records()
+    for row in data:
+        if not row.get("Опубліковано"):
+            text = row.get("Текст", "")
+            image = row.get("Зображення", "")
+            video = row.get("Відео", "")
+
+            media = []
+            if image:
+                media.append(InputMediaPhoto(media=image, caption=text))
+            elif video:
+                media.append(InputMediaVideo(media=video, caption=text))
+            else:
+                bot.send_message(chat_id=CHAT_ID, text=text)
+                sheet.update_cell(data.index(row)+2, len(row)+1, "Так")
+                continue
+
+            bot.send_media_group(chat_id=CHAT_ID, media=media)
+            sheet.update_cell(data.index(row)+2, len(row)+1, "Так")
+
+scheduler = BlockingScheduler()
+scheduler.add_job(post_from_sheet, 'interval', minutes=30)
 scheduler.start()
-
-print("Бот запущено...")
-
-# Тримати процес живим
-while True:
-    time.sleep(60)
